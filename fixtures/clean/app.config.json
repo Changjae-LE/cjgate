@@ -1,0 +1,11 @@
+{
+  "service": "cjgate-demo",
+  "logLevel": "info",
+  "timeoutMs": 3000,
+  "retries": 2,
+  "featureFlags": ["gate", "verify"],
+  "endpoints": {
+    "health": "/healthz",
+    "metrics": "/metrics"
+  }
+}

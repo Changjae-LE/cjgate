@@ -1,9 +1,9 @@
 /**
  * Local verification for the CJGate security gate.
  *
- * Runs the compiled `runSecurityGate` circuit entirely in-process against the
- * Compact JS runtime — no wallet, no proof server, no devnet. It exercises
- * three cases:
+ * Runs the compiled `runSecurityGate` circuit entirely in-process (via
+ * `src/policy.ts`) — no wallet, no proof server, no devnet. It exercises
+ * three cases with synthetic signal values:
  *
  *   clean input      (0 secrets, 0 SAST high)  -> PASS  (policyPassed == true)
  *   secret violation (1 secret,  0 SAST high)  -> BLOCK  (assertion fails)
@@ -14,63 +14,8 @@
  *
  * Exit code 0 iff all three cases behave as expected.
  */
-import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-import {
-  createCircuitContext,
-  createConstructorContext,
-  sampleContractAddress,
-} from '@midnight-ntwrk/compact-runtime';
-
-import {
-  Contract,
-  ledger,
-  type Ledger,
-} from '../contracts/managed/cjgate/contract/index.js';
-import {
-  createCJGatePrivateState,
-  witnesses,
-  type CJGatePrivateState,
-} from '../src/witnesses.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// A stand-in Zswap coin public key for local, proof-free execution.
-const LOCAL_COIN_PUBLIC_KEY = '0'.repeat(64);
-
-type GateOutcome =
-  | { kind: 'pass'; policyPassed: boolean }
-  | { kind: 'block'; reason: string };
-
-/**
- * Instantiate the contract with the given private state and run the gate
- * once. Returns 'pass' with the resulting public ledger value, or 'block'
- * when the circuit aborts (an assertion failed).
- */
-function runGate(privateState: CJGatePrivateState): GateOutcome {
-  const contract = new Contract<CJGatePrivateState>(witnesses);
-
-  const { currentContractState, currentPrivateState, currentZswapLocalState } =
-    contract.initialState(
-      createConstructorContext(privateState, LOCAL_COIN_PUBLIC_KEY),
-    );
-
-  const circuitContext = createCircuitContext<CJGatePrivateState>(
-    sampleContractAddress(),
-    currentZswapLocalState,
-    currentContractState.data,
-    currentPrivateState,
-  );
-
-  try {
-    const { context } = contract.impureCircuits.runSecurityGate(circuitContext);
-    const state: Ledger = ledger(context.currentQueryContext.state);
-    return { kind: 'pass', policyPassed: state.policyPassed };
-  } catch (err) {
-    return { kind: 'block', reason: err instanceof Error ? err.message : String(err) };
-  }
-}
+import { evaluatePolicy } from '../src/policy.js';
+import { createCJGatePrivateState, type CJGatePrivateState } from '../src/witnesses.js';
 
 type Case = {
   name: string;
@@ -79,21 +24,9 @@ type Case = {
 };
 
 const cases: Case[] = [
-  {
-    name: 'clean input',
-    privateState: createCJGatePrivateState(0n, 0n),
-    expect: 'PASS',
-  },
-  {
-    name: 'secret violation',
-    privateState: createCJGatePrivateState(1n, 0n),
-    expect: 'BLOCK',
-  },
-  {
-    name: 'SAST violation',
-    privateState: createCJGatePrivateState(0n, 1n),
-    expect: 'BLOCK',
-  },
+  { name: 'clean input', privateState: createCJGatePrivateState(0n, 0n), expect: 'PASS' },
+  { name: 'secret violation', privateState: createCJGatePrivateState(1n, 0n), expect: 'BLOCK' },
+  { name: 'SAST violation', privateState: createCJGatePrivateState(0n, 1n), expect: 'BLOCK' },
 ];
 
 function main(): void {
@@ -103,23 +36,16 @@ function main(): void {
   let failures = 0;
 
   for (const c of cases) {
-    const outcome = runGate(c.privateState);
+    const result = evaluatePolicy(c.privateState);
+    const detail =
+      result.outcome === 'PASS'
+        ? `policyPassed=${result.policyPassed}`
+        : 'assertion failed, ledger unchanged';
 
-    let actual: 'PASS' | 'BLOCK';
-    let detail: string;
-    if (outcome.kind === 'pass') {
-      // A pass is only valid if the public flag actually flipped to true.
-      actual = outcome.policyPassed ? 'PASS' : 'BLOCK';
-      detail = `policyPassed=${outcome.policyPassed}`;
-    } else {
-      actual = 'BLOCK';
-      detail = 'assertion failed, ledger unchanged';
-    }
-
-    const ok = actual === c.expect;
+    const ok = result.outcome === c.expect;
     if (!ok) failures++;
     console.log(
-      `  ${ok ? 'ok  ' : 'FAIL'}  ${c.name.padEnd(18)} expected ${c.expect}, got ${actual}  (${detail})`,
+      `  ${ok ? 'ok  ' : 'FAIL'}  ${c.name.padEnd(18)} expected ${c.expect}, got ${result.outcome}  (${detail})`,
     );
   }
 

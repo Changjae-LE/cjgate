@@ -1,0 +1,23 @@
+# CJGate Gitleaks configuration.
+#
+# Applies when the scan TARGET is the repository root (Gitleaks resolves
+# `(target)/.gitleaks.toml`). Scanning a subdirectory directly — e.g.
+# `fixtures/secret` in the fixture test — does NOT pick this up, so the
+# synthetic fixture is still detected there.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignore generated/vendored trees and CJGate's synthetic test fixture"
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)\.git/''',
+  '''(^|/)dist/''',
+  '''(^|/)contracts/managed/''',
+  '''(^|/)\.cjgate/''',
+  '''(^|/)\.midnight-wallet-state/''',
+  '''(^|/)midnight-level-db/''',
+  # Deliberately fake credential used only to exercise the BLOCK path.
+  '''(^|/)fixtures/secret/''',
+]

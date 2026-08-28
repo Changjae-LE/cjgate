@@ -9,6 +9,8 @@
     "compile": "compact compile contracts/cjgate.compact contracts/managed/cjgate",
     "build": "npx tsc --noEmit",
     "verify": "npx tsx scripts/policy-check.ts",
+    "cjgate:check": "npx tsx scripts/cjgate-check.ts",
+    "cjgate:check:test": "npx tsx scripts/cjgate-check.fixtures.ts",
     "setup": "npx tsx src/setup.ts",
     "deploy": "npx tsx src/deploy.ts",
     "cli": "npx tsx src/cli.ts",

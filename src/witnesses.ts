@@ -7,9 +7,10 @@
  * written to the ledger and never printed or logged by this project. The
  * on-chain contract only ever learns the boolean outcome of `== 0`.
  *
- * For this first implementation the counts are carried in the contract's
- * private state. A later iteration will populate them from real scanners
- * (Gitleaks, Semgrep); nothing here depends on that.
+ * The counts are carried in the contract's private state. `secretsFound` is
+ * populated by the Gitleaks integration (`src/scanners/gitleaks.ts`, driven by
+ * `npm run cjgate:check`). `sastHighFindings` stays private and is fixed at
+ * zero until Semgrep is integrated.
  */
 
 import type { WitnessContext } from '@midnight-ntwrk/compact-runtime';
