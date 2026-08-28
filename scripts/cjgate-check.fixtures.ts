@@ -1,21 +1,24 @@
 /**
- * Fixture test for the CJGate + Gitleaks pipeline.
+ * Fixture test for the full CJGate pipeline (Gitleaks + Semgrep).
  *
- * Runs both bundled fixtures through the real path
- * (Gitleaks scan -> private `secretsFound` -> CJGate Compact policy):
+ * Runs each bundled fixture through the real path
+ * (Gitleaks -> private `secretsFound`, Semgrep -> private `sastHighFindings`,
+ * both -> CJGate Compact policy):
  *
- *   fixtures/clean   -> PASS   (no secrets)
+ *   fixtures/clean   -> PASS   (no secrets, no SAST findings)
  *   fixtures/secret  -> BLOCK  (one deliberately fake credential)
+ *   fixtures/sast    -> BLOCK  (one intentionally vulnerable demo file)
  *
  * Prints only PASS/BLOCK outcomes. Never prints finding counts, secret
- * values, or file contents.
+ * values, vulnerable source, or file contents.
  *
- * Exit code 0 iff both fixtures behave as expected.
+ * Exit code 0 iff all fixtures behave as expected.
  */
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { runGitleaksScan } from '../src/scanners/gitleaks.js';
+import { runSemgrepScan } from '../src/scanners/semgrep.js';
 import { evaluatePolicy } from '../src/policy.js';
 import { createCJGatePrivateState } from '../src/witnesses.js';
 
@@ -26,18 +29,25 @@ type FixtureCase = { name: string; dir: string; expect: 'PASS' | 'BLOCK' };
 const cases: FixtureCase[] = [
   { name: 'clean fixture', dir: 'fixtures/clean', expect: 'PASS' },
   { name: 'synthetic secret fixture', dir: 'fixtures/secret', expect: 'BLOCK' },
+  { name: 'synthetic SAST fixture', dir: 'fixtures/sast', expect: 'BLOCK' },
 ];
 
 function main(): void {
-  console.log('\nCJGate Gitleaks fixture test\n');
+  console.log('\nCJGate scanner fixture test (gitleaks + semgrep)\n');
 
   let failures = 0;
 
   for (const c of cases) {
     // Gitleaks -> count only.
     const { secretsFound } = runGitleaksScan(c.dir, { cwd: repoRoot });
-    // Gitleaks-only stage: SAST kept private and fixed at zero.
-    const privateState = createCJGatePrivateState(BigInt(secretsFound), 0n);
+    // Semgrep -> blocking-severity count only. exclude: [] so a fixture dir
+    // targeted directly is never skipped by the default exclude list.
+    const { sastHighFindings } = runSemgrepScan(c.dir, { cwd: repoRoot, exclude: [] });
+
+    const privateState = createCJGatePrivateState(
+      BigInt(secretsFound),
+      BigInt(sastHighFindings),
+    );
     const { outcome } = evaluatePolicy(privateState);
 
     const ok = outcome === c.expect;
@@ -50,7 +60,7 @@ function main(): void {
     console.error(`${failures} fixture case(s) did not match expectations`);
     process.exit(1);
   }
-  console.log('Both CJGate Gitleaks fixtures behaved as expected.');
+  console.log('All CJGate scanner fixtures behaved as expected.');
   process.exit(0);
 }
 

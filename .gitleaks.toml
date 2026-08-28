@@ -20,4 +20,6 @@ paths = [
   '''(^|/)midnight-level-db/''',
   # Deliberately fake credential used only to exercise the BLOCK path.
   '''(^|/)fixtures/secret/''',
+  # Intentionally vulnerable demo code (no secrets, but keep it out of repo scans).
+  '''(^|/)fixtures/sast/''',
 ]

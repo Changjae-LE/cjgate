@@ -1,0 +1,45 @@
+# CJGate SAST ruleset.
+#
+# The default Semgrep config for `npm run cjgate:check`. High-signal rules only,
+# all at ERROR severity — CJGate's blocking SAST severity policy blocks on
+# ERROR / HIGH / CRITICAL findings.
+#
+# Override with the CJGATE_SEMGREP_CONFIG env var to point at a broader ruleset
+# (e.g. `p/default`, `auto`, or another path).
+
+rules:
+  - id: cjgate-js-command-injection-exec
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Command injection risk: a dynamically built string is passed to a
+      child_process exec* call. Use execFile/spawn with an argument array.
+    metadata:
+      category: security
+      cwe: "CWE-78: OS Command Injection"
+    patterns:
+      - pattern-either:
+          - pattern: $O.exec("..." + $X, ...)
+          - pattern: $O.exec($X + $Y, ...)
+          - pattern: $O.exec(`...${$X}...`, ...)
+          - pattern: $O.execSync("..." + $X, ...)
+          - pattern: $O.execSync($X + $Y, ...)
+          - pattern: $O.execSync(`...${$X}...`, ...)
+          - pattern: exec("..." + $X, ...)
+          - pattern: exec(`...${$X}...`, ...)
+          - pattern: execSync("..." + $X, ...)
+          - pattern: execSync(`...${$X}...`, ...)
+
+  - id: cjgate-js-eval-non-literal
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Use of eval() with a non-literal argument allows arbitrary code
+      execution.
+    metadata:
+      category: security
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+    patterns:
+      - pattern: eval($X)
+      - pattern-not: eval("...")
+      - pattern-not: eval('...')

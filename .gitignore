@@ -60,6 +60,7 @@ temp/
 .midnight-wallet-state/
 midnight-level-db/
 
-# CJGate scanner working dir — transient Gitleaks reports (may contain findings)
+# CJGate scanner working dir — transient Gitleaks / Semgrep reports (may contain findings)
 .cjgate/
 gitleaks-report.json
+semgrep-report.json

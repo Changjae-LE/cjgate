@@ -1,21 +1,23 @@
 /**
  * `npm run cjgate:check [-- --source <path>]`
  *
- * Runs the first real CJGate scanner stage:
+ * Runs both real CJGate scanner stages over the target directory
+ * (default: the repository root):
  *
- *   1. Gitleaks scans the target directory (default: the repository root).
- *   2. The finding count becomes the private `secretsFound` signal.
- *   3. `sastHighFindings` is kept private and fixed at zero for this
- *      Gitleaks-only stage (Semgrep is not integrated yet).
- *   4. The CJGate Compact policy (`runSecurityGate`) is evaluated locally.
+ *   1. Gitleaks  -> finding count           -> private `secretsFound`
+ *   2. Semgrep   -> blocking-severity count -> private `sastHighFindings`
+ *   3. Both private values feed the CJGate Compact policy (`runSecurityGate`),
+ *      evaluated locally.
  *
- * Output is deliberately minimal. This script never prints secret values,
- * matched strings, file snippets, finding locations, or the numeric
- * `secretsFound` count — only high-level status lines.
+ * Output is deliberately minimal. This script never prints vulnerable source,
+ * matched snippets, rule messages, file contents, finding locations, finding
+ * counts, or the numeric `secretsFound` / `sastHighFindings` values — only
+ * high-level status lines.
  *
- * Exit code: 0 when the policy passes, 1 when it is blocked.
+ * Exit codes: 0 = policy passed, 1 = policy blocked, 2 = a scanner failed to run.
  */
 import { runGitleaksScan } from '../src/scanners/gitleaks.js';
+import { runSemgrepScan } from '../src/scanners/semgrep.js';
 import { evaluatePolicy } from '../src/policy.js';
 import { createCJGatePrivateState } from '../src/witnesses.js';
 
@@ -40,27 +42,35 @@ function main(): void {
   const source = parseSource(process.argv);
 
   console.log('CJGate security check');
-  console.log(`  scanner: gitleaks`);
-  console.log(`  target:  ${source}`);
+  console.log('  scanners: gitleaks, semgrep');
+  console.log(`  target:   ${source}`);
   console.log('');
 
-  // ── Stage 1: Gitleaks ────────────────────────────────────────────────────
+  // ── Stage 1: Gitleaks -> secretsFound (private) ─────────────────────────
   let secretsFound: number;
   try {
-    const scan = runGitleaksScan(source);
-    secretsFound = scan.secretsFound; // private from here on — never printed
+    secretsFound = runGitleaksScan(source).secretsFound; // private — never printed
     console.log('Gitleaks scan completed');
   } catch (err) {
     console.error('Gitleaks scan failed to run:', err instanceof Error ? err.message : String(err));
     process.exit(2);
   }
 
-  // ── Stage 2: SAST (not yet integrated) ───────────────────────────────────
-  // Kept private and fixed at zero until Semgrep is wired up.
-  const sastHighFindings = 0n;
+  // ── Stage 2: Semgrep -> sastHighFindings (private) ──────────────────────
+  let sastHighFindings: number;
+  try {
+    sastHighFindings = runSemgrepScan(source).sastHighFindings; // private — never printed
+    console.log('Semgrep scan completed');
+  } catch (err) {
+    console.error('Semgrep scan failed to run:', err instanceof Error ? err.message : String(err));
+    process.exit(2);
+  }
 
-  // ── Stage 3: CJGate Compact policy ──────────────────────────────────────
-  const privateState = createCJGatePrivateState(BigInt(secretsFound), sastHighFindings);
+  // ── Stage 3: CJGate Compact policy ─────────────────────────────────────
+  const privateState = createCJGatePrivateState(
+    BigInt(secretsFound),
+    BigInt(sastHighFindings),
+  );
   const result = evaluatePolicy(privateState);
 
   console.log('');
