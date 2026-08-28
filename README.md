@@ -37,6 +37,18 @@ runtime and checks three cases:
 It prints only the pass/block outcome and the public `policyPassed` value —
 never the private counts.
 
+## CI security gate
+
+`.github/workflows/cjgate-security-gate.yml` runs the full `npm run cjgate:check`
+pipeline on every push to `main` and every PR targeting `main`: Node 22 + `npm ci`,
+a pinned Gitleaks, the Docker-based Semgrep scanner, the Compact compiler pinned
+to 0.31.1, `npm run build`, `npm run compile`, the three fixtures, and a
+whole-repository scan. A repository-scan **BLOCK** fails the job; the vulnerable
+fixtures are asserted to return a non-zero exit without failing the run. The job
+uses `permissions: contents: read`, needs no repository secrets, starts no
+Midnight services, and generates no live ZK proof — the Compact policy is only
+evaluated locally.
+
 ## Quick start
 
 Requirements: Node 22, Docker (with Compose v2), and the Compact compiler at the version pinned in `.compact-version` at the create-mn-app repo root (the version this project was scaffolded against).

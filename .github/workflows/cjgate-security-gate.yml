@@ -1,0 +1,131 @@
+name: CJGate Security Gate
+
+# CI security gate for CJGate.
+#
+# Runs the same local pipeline as `npm run cjgate:check`:
+#   Gitleaks  -> private secretsFound
+#   Semgrep   -> private sastHighFindings   (Docker-based scanner, as locally)
+#   both      -> CJGate Compact policy, evaluated locally via the JS runtime
+#
+# This job never starts a Midnight node, indexer, wallet, or proof server, and
+# never generates a live ZK proof — the Compact policy is only evaluated
+# in-process. It needs no repository secrets, wallet keys, or mnemonics.
+#
+# Scanner findings, matched snippets, vulnerable source, and the numeric
+# secretsFound / sastHighFindings values are never printed: the scanner
+# modules only ever surface high-level status lines and pass/block outcomes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: read the checked-out code, nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: cjgate-security-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-gate:
+    runs-on: ubuntu-latest
+
+    env:
+      # Pinned scanner / toolchain versions.
+      GITLEAKS_VERSION: "8.30.1"
+      COMPACT_COMPILER_VERSION: "0.31.1"
+      # The Semgrep scanner (src/scanners/semgrep.ts) runs this image via Docker
+      # when no native `semgrep` binary is present — which is the case on the
+      # GitHub-hosted runner. Pinned for reproducibility.
+      CJGATE_SEMGREP_IMAGE: "semgrep/semgrep:1.174.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Gitleaks ${{ env.GITLEAKS_VERSION }} (pinned)
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fLsS "$url" -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          rm -f /tmp/gitleaks.tar.gz /tmp/gitleaks
+          gitleaks version
+
+      - name: Install Compact CLI and pin compiler ${{ env.COMPACT_COMPILER_VERSION }}
+        env:
+          # Automatically provided by GitHub Actions and scoped by the
+          # `permissions:` block above — this is NOT a configured repository
+          # secret. Used only to raise the GitHub API rate limit while the
+          # Compact CLI resolves and downloads the pinned compiler.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          # The installer drops the CLI in ~/.local/bin (or ~/.compact/bin).
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.compact/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$HOME/.compact/bin:$PATH"
+          # Download + set the pinned compiler as the default used by `compact compile`.
+          compact update "$COMPACT_COMPILER_VERSION"
+          echo "Compact CLI:      $(compact --version)"
+          echo "Compact compiler: $(compact compile --version)"
+          actual="$(compact compile --version | tr -d '[:space:]')"
+          if [ "$actual" != "$COMPACT_COMPILER_VERSION" ]; then
+            echo "::error::Compact compiler is $actual, expected $COMPACT_COMPILER_VERSION"
+            exit 1
+          fi
+
+      - name: Prepare Semgrep scanner image (pinned)
+        run: docker pull "$CJGATE_SEMGREP_IMAGE"
+
+      # Compact compilation must run before the TypeScript check: src/policy.ts
+      # imports the generated contract types from contracts/managed/ (gitignored).
+      - name: Compact compilation
+        run: npm run compile
+
+      - name: TypeScript validation
+        run: npm run build
+
+      - name: Fixture — clean (expect PASS)
+        run: npm run cjgate:check -- --source fixtures/clean
+
+      - name: Fixture — synthetic secret (expect BLOCK)
+        run: |
+          set -uo pipefail
+          code=0
+          npm run --silent cjgate:check -- --source fixtures/secret || code=$?
+          case "$code" in
+            1) echo "fixtures/secret: CJGate returned BLOCK (non-zero) as expected" ;;
+            0) echo "::error::fixtures/secret unexpectedly PASSED"; exit 1 ;;
+            *) echo "::error::cjgate:check failed to run for fixtures/secret (exit $code)"; exit 1 ;;
+          esac
+
+      - name: Fixture — synthetic SAST (expect BLOCK)
+        run: |
+          set -uo pipefail
+          code=0
+          npm run --silent cjgate:check -- --source fixtures/sast || code=$?
+          case "$code" in
+            1) echo "fixtures/sast: CJGate returned BLOCK (non-zero) as expected" ;;
+            0) echo "::error::fixtures/sast unexpectedly PASSED"; exit 1 ;;
+            *) echo "::error::cjgate:check failed to run for fixtures/sast (exit $code)"; exit 1 ;;
+          esac
+
+      # Real gate: a BLOCK here (non-zero exit) fails the job.
+      - name: CJGate repository security scan (BLOCK fails the job)
+        run: npm run cjgate:check
