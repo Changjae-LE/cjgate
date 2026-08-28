@@ -1,6 +1,41 @@
 # cjgate
 
-A Midnight Network smart contract scaffolded with create-mn-app.
+CJGate — a privacy-preserving DevSecOps security gate on Midnight, scaffolded
+with create-mn-app.
+
+## What CJGate does
+
+The `contracts/cjgate.compact` contract enforces one security policy:
+
+```
+secretsFound == 0  AND  sastHighFindings == 0
+```
+
+`secretsFound` and `sastHighFindings` are **private** signals supplied by the
+local prover (witnesses). Their numeric values never enter the ledger, the
+public transcript, or any log.
+
+- Both zero → the `runSecurityGate` circuit succeeds and the public ledger
+  field `policyPassed` becomes `true`.
+- Either non-zero → an in-circuit `assert` fails, the proof is never produced,
+  and no state transition occurs.
+
+Scanner integration (Gitleaks, Semgrep) is **not** wired up yet — the counts
+are provided directly for now.
+
+## Local verification (no devnet)
+
+`npm run verify` runs the compiled gate in-process against the Compact JS
+runtime and checks three cases:
+
+| Input                              | Expected |
+| ---------------------------------- | -------- |
+| clean (0 secrets, 0 SAST high)     | PASS     |
+| secret violation (1 secret)        | BLOCK    |
+| SAST violation (1 SAST high)       | BLOCK    |
+
+It prints only the pass/block outcome and the public `policyPassed` value —
+never the private counts.
 
 ## Quick start
 
@@ -15,8 +50,8 @@ npm run test:e2e
 `npm run setup` runs end-to-end with no prompts:
 
 1. `docker compose up -d --wait` — starts a local Midnight devnet (node, indexer, proof-server) and blocks until all three pass their healthchecks.
-2. `npm run compile` — compiles `contracts/hello-world.compact` to `contracts/managed/hello-world/`.
-3. `npm run deploy` — derives the genesis-seed wallet (NIGHT pre-minted), registers UTXOs for DUST generation, deploys the contract, writes `.midnight-state.json`.
+2. `npm run compile` — compiles `contracts/cjgate.compact` to `contracts/managed/cjgate/`.
+3. `npm run deploy` — derives the genesis-seed wallet (NIGHT pre-minted), registers UTXOs for DUST generation, deploys the contract (with a clean scan state), writes `.midnight-state.json`.
 
 `npm run test:e2e` reconnects to the deployed contract and reads its ledger state. Exits 0 if the contract is live and indexable.
 
@@ -169,8 +204,9 @@ generated state.
 | ----------------------- | -------------------------------------------------------------- |
 | `npm run setup`         | One-shot: start devnet, compile, deploy.                       |
 | `npm run compile`       | Compile the Compact contract.                                  |
+| `npm run verify`        | Local PASS/BLOCK check of the security gate (no devnet).       |
 | `npm run deploy`        | Deploy the compiled contract (requires devnet up + compiled).  |
-| `npm run cli`           | Interactive CLI to call circuits on the deployed contract.     |
+| `npm run cli`           | Interactive CLI: run the gate / read policy status / balance.  |
 | `npm run check-balance` | Print the genesis-seed wallet's NIGHT and DUST balances.       |
 | `npm run test:e2e`      | Smoke + read-back check against the deployed contract.         |
 | `npm run clean`         | Remove `contracts/managed/`, `.midnight-state.json`, and `.midnight-wallet-state/`. |
@@ -181,10 +217,12 @@ generated state.
 ```
 cjgate/
 ├── contracts/
-│   └── hello-world.compact     # Compact source
+│   └── cjgate.compact          # Compact source — the security gate
 ├── scripts/
+│   ├── policy-check.ts         # local PASS/BLOCK verification (`npm run verify`)
 │   └── e2e-check.ts            # smoke + read-back
 ├── src/
+│   ├── witnesses.ts            # private scan signals + witness implementations
 │   ├── network.ts              # network selection + state file management
 │   ├── wallet.ts               # wallet construction + sync-state cache
 │   ├── setup.ts                # orchestrator for `npm run setup`

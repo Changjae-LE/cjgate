@@ -6,8 +6,9 @@
   "author": "",
   "license": "MIT",
   "scripts": {
-    "compile": "compact compile contracts/hello-world.compact contracts/managed/hello-world",
-    "build": "npx tsc --noEmit || true",
+    "compile": "compact compile contracts/cjgate.compact contracts/managed/cjgate",
+    "build": "npx tsc --noEmit",
+    "verify": "npx tsx scripts/policy-check.ts",
     "setup": "npx tsx src/setup.ts",
     "deploy": "npx tsx src/deploy.ts",
     "cli": "npx tsx src/cli.ts",

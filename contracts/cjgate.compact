@@ -1,0 +1,38 @@
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+// ─── Public ledger state ─────────────────────────────────────────────────────
+//
+// policyPassed is the only publicly visible state. It starts false and can
+// only ever transition to true, and only when a security scan clears the
+// CJGate policy. A failing scan aborts the circuit before this write is
+// reached, so no state transition occurs.
+export ledger policyPassed: Boolean;
+
+// ─── Private security signals ────────────────────────────────────────────────
+//
+// Supplied by the local prover (the DevSecOps runner). These are witnesses:
+// their numeric values stay on the prover's machine and never enter the
+// public transcript or the ledger. Only the boolean "== 0" outcome of the
+// policy check is ever disclosed.
+witness secretsFound(): Uint<64>;
+witness sastHighFindings(): Uint<64>;
+
+// ─── Security gate ──────────────────────────────────────────────────────────
+//
+// Enforces the CJGate policy:
+//
+//     secretsFound == 0 AND sastHighFindings == 0
+//
+// On success the circuit publishes policyPassed = true. On any violation the
+// matching assertion fails, the circuit aborts, and the ledger is unchanged.
+export circuit runSecurityGate(): [] {
+  const secrets = secretsFound();
+  const sastHigh = sastHighFindings();
+
+  assert(disclose(secrets == 0), "CJGate: secret scan must report zero findings");
+  assert(disclose(sastHigh == 0), "CJGate: SAST must report zero high-severity findings");
+
+  policyPassed = true;
+}

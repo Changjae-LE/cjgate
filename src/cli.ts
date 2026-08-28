@@ -1,5 +1,5 @@
 /**
- * CLI for interacting with cjgate contract
+ * CLI for interacting with the CJGate security-gate contract.
  */
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
@@ -7,7 +7,6 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
-import { Buffer } from 'buffer';
 
 // Midnight SDK imports
 import { findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
@@ -17,6 +16,7 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, getDeployment } from './network';
 import { createWallet, persistWalletState, unshieldedToken, type WalletContext } from './wallet';
+import { witnesses, createCJGatePrivateState, cleanCJGatePrivateState } from './witnesses';
 import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-js';
 
 // Enable WebSocket for GraphQL subscriptions
@@ -24,8 +24,9 @@ import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-j
 globalThis.WebSocket = WebSocket;
 
 // Must match the privateStateId used at deploy time so the CLI reconnects to
-// the same private state. The hello-world contract has no witnesses (empty state).
-const PRIVATE_STATE_ID = 'helloWorldPrivateState';
+// the same private state. CJGate's private state holds the security-scan
+// signals its witnesses read; their numeric values are never logged here.
+const PRIVATE_STATE_ID = 'cjgatePrivateState';
 
 const { network, config: networkConfig } = resolveNetwork();
 const WALLET = getOrCreateWallet(network);
@@ -36,7 +37,7 @@ const SEED = WALLET.seed;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const zkConfigPath = path.resolve(__dirname, '..', 'contracts', 'managed', 'hello-world');
+const zkConfigPath = path.resolve(__dirname, '..', 'contracts', 'managed', 'cjgate');
 
 // Load compiled contract
 const contractPath = path.join(zkConfigPath, 'contract', 'index.js');
@@ -47,11 +48,14 @@ if (!fs.existsSync(contractPath)) {
   process.exit(1);
 }
 
-const HelloWorld = await import(pathToFileURL(contractPath).href);
+const CJGate = await import(pathToFileURL(contractPath).href);
 
-const compiledContract = CompiledContract.make('hello-world', HelloWorld.Contract).pipe(
-  CompiledContract.withVacantWitnesses,
-  CompiledContract.withCompiledFileAssets(zkConfigPath),
+// The contract module is loaded dynamically (typed `any`), so the CompiledContract
+// generic chain can't infer its witness type — cast the combinators. Downstream
+// SDK calls already take `compiledContract as any`.
+const compiledContract: any = (CompiledContract.make('cjgate', CJGate.Contract) as any).pipe(
+  (CompiledContract.withWitnesses as any)(witnesses),
+  (CompiledContract.withCompiledFileAssets as any)(zkConfigPath),
 );
 
 // ─── Providers ─────────────────────────────────────────────────────────────────
@@ -85,7 +89,7 @@ async function createProviders(walletCtx: WalletContext) {
 
   return {
     privateStateProvider: levelPrivateStateProvider({
-      privateStateStoreName: 'hello-world-state',
+      privateStateStoreName: 'cjgate-state',
       accountId,
       privateStoragePasswordProvider: () => privateStatePassword,
     }),
@@ -161,7 +165,7 @@ async function main() {
       compiledContract: compiledContract as any,
       contractAddress: deployment.address,
       privateStateId: PRIVATE_STATE_ID,
-      initialPrivateState: {},
+      initialPrivateState: cleanCJGatePrivateState,
     });
 
     console.log('  ✅ Connected!\n');
@@ -170,8 +174,8 @@ async function main() {
     let running = true;
     while (running) {
       console.log('─── Menu ───────────────────────────────────────────────────────');
-      console.log('  1. Store a message');
-      console.log('  2. Read current message');
+      console.log('  1. Run security gate');
+      console.log('  2. Read policy status');
       console.log('  3. Check wallet balance');
       console.log('  4. Exit\n');
 
@@ -179,29 +183,47 @@ async function main() {
 
       switch (choice.trim()) {
         case '1': {
-          const message = await rl.question('  Enter your message: ');
+          // The two counts are private security signals. They are staged into
+          // the contract's private state for the witnesses to read and are
+          // never echoed back or logged.
+          const secretsRaw = await rl.question('  Secret-scanner findings count: ');
+          const sastRaw = await rl.question('  SAST high-severity findings count: ');
+          let nextPrivateState;
+          try {
+            nextPrivateState = createCJGatePrivateState(
+              BigInt(secretsRaw.trim() || '0'),
+              BigInt(sastRaw.trim() || '0'),
+            );
+          } catch (error) {
+            console.error('\n  ❌ Invalid input:', error instanceof Error ? error.message : error);
+            break;
+          }
+          await providers.privateStateProvider.set(PRIVATE_STATE_ID, nextPrivateState);
+
           console.log('\n  Submitting transaction (this may take 30-60 seconds)...');
           try {
-            const tx = await deployed.callTx.storeMessage(message);
-            console.log(`\n  ✅ Message stored: "${message}"`);
+            const tx = await deployed.callTx.runSecurityGate();
+            console.log('\n  ✅ Security gate PASSED — policy satisfied.');
             console.log(`  Transaction ID: ${tx.public.txId}`);
             console.log(`  Block height: ${tx.public.blockHeight}\n`);
           } catch (error) {
-            console.error('\n  ❌ Failed:', error instanceof Error ? error.message : error);
+            // A policy violation makes an in-circuit assertion fail: the proof
+            // is never produced and no state transition occurs.
+            console.error('\n  🚫 Security gate BLOCKED — policy not satisfied; no state change.');
+            console.error('     ', error instanceof Error ? error.message : error, '\n');
           }
           break;
         }
 
         case '2': {
-          console.log('\n  Reading message from blockchain...');
+          console.log('\n  Reading policy status from blockchain...');
           try {
             const contractState = await providers.publicDataProvider.queryContractState(deployment.address);
             if (contractState) {
-              const ledgerState = HelloWorld.ledger(contractState.data);
-              const message = Buffer.from(ledgerState.message).toString();
-              console.log(`\n  📋 Current message: "${message}"\n`);
+              const ledgerState = CJGate.ledger(contractState.data);
+              console.log(`\n  📋 policyPassed: ${ledgerState.policyPassed}\n`);
             } else {
-              console.log('\n  📋 No message found (contract state empty)\n');
+              console.log('\n  📋 No contract state found\n');
             }
           } catch (error) {
             console.error('\n  ❌ Failed:', error instanceof Error ? error.message : error);
