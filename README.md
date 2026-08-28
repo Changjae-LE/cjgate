@@ -49,6 +49,32 @@ uses `permissions: contents: read`, needs no repository secrets, starts no
 Midnight services, and generates no live ZK proof — the Compact policy is only
 evaluated locally.
 
+## Live ZK proof flow (local devnet)
+
+`npm run cjgate:live [-- --source <path>]` is the real thing, and is **separate
+from `cjgate:check`/CI**: it runs the same real scanners, keeps both results
+private, then invokes the deployed CJGate contract through the local Midnight
+proof server, generates a genuine zero-knowledge proof, and submits a real
+transaction to the local devnet.
+
+- Clean source → real proof + transaction; public `policyPassed` becomes `true`.
+  The command prints the contract address, transaction id, and safe
+  proof-server activity (request/timing counts only).
+- Policy violation → the in-circuit assertion rejects the transition: no proof
+  is requested, no transaction is submitted, the ledger is unchanged.
+
+Requires `npm run proof-server:start` (node + indexer + proof server). It
+auto-deploys a fresh CJGate contract to the devnet if `.midnight-state.json`
+has no current `cjgate` deployment (or pass `--redeploy`). Local devnet only —
+it refuses to run against `preview`/`preprod`. Never prints scanner findings,
+finding counts, `secretsFound`/`sastHighFindings`, wallet seed, or keys.
+
+> **Dependency note:** `package.json` pins `@midnight-ntwrk/onchain-runtime-v3`
+> to `3.0.0` via `overrides` so the generated contract (through
+> `compact-runtime`) and `midnight-js-protocol@4.1.1` share one
+> `StateValue`/`ChargedState` class. Without the pin, `compact-runtime` floats
+> to `3.1.0` and the live `callTx` fails with `expected instance of StateValue`.
+
 ## Quick start
 
 Requirements: Node 22, Docker (with Compose v2), and the Compact compiler at the version pinned in `.compact-version` at the create-mn-app repo root (the version this project was scaffolded against).
@@ -217,6 +243,8 @@ generated state.
 | `npm run setup`         | One-shot: start devnet, compile, deploy.                       |
 | `npm run compile`       | Compile the Compact contract.                                  |
 | `npm run verify`        | Local PASS/BLOCK check of the security gate (no devnet).       |
+| `npm run cjgate:check`  | Real Gitleaks + Semgrep, Compact policy evaluated locally (no proof). |
+| `npm run cjgate:live`   | Real scanners + real ZK proof + real devnet transaction.       |
 | `npm run deploy`        | Deploy the compiled contract (requires devnet up + compiled).  |
 | `npm run cli`           | Interactive CLI: run the gate / read policy status / balance.  |
 | `npm run check-balance` | Print the genesis-seed wallet's NIGHT and DUST balances.       |

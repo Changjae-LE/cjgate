@@ -11,6 +11,7 @@
     "verify": "npx tsx scripts/policy-check.ts",
     "cjgate:check": "npx tsx scripts/cjgate-check.ts",
     "cjgate:check:test": "npx tsx scripts/cjgate-check.fixtures.ts",
+    "cjgate:live": "npx tsx scripts/cjgate-live.ts",
     "setup": "npx tsx src/setup.ts",
     "deploy": "npx tsx src/deploy.ts",
     "cli": "npx tsx src/cli.ts",
@@ -47,5 +48,9 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "keywords": ["midnight", "blockchain", "zero-knowledge", "privacy"]
+  "keywords": ["midnight", "blockchain", "zero-knowledge", "privacy"],
+  "overridesComment": "onchain-runtime-v3 is pinned so the generated contract (via compact-runtime) and midnight-js-protocol@4.1.1 share one StateValue/ChargedState class; otherwise compact-runtime floats to 3.1.0 and callTx merge fails with 'expected instance of StateValue'.",
+  "overrides": {
+    "@midnight-ntwrk/onchain-runtime-v3": "3.0.0"
+  }
 }

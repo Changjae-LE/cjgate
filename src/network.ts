@@ -29,6 +29,12 @@ export interface DeploymentRecord {
   address: string;
   deployedAt: string;
   deployer: string;
+  /**
+   * Name of the contract this address hosts. Absent on records written before
+   * this field existed (e.g. the original hello-world scaffold deployment) —
+   * treat a missing/mismatched value as stale.
+   */
+  contract?: string;
 }
 
 export interface WalletRecord {
@@ -350,6 +356,7 @@ export function recordDeployment(
   network: NetworkId,
   address: string,
   deployer: string,
+  contract?: string,
   opts: FsOptions = {},
 ): void {
   const cwd = opts.cwd ?? process.cwd();
@@ -360,9 +367,15 @@ export function recordDeployment(
     wallets: {},
     deployments: {},
   };
+  const record: DeploymentRecord = {
+    address,
+    deployer,
+    deployedAt: new Date().toISOString(),
+  };
+  if (contract) record.contract = contract;
   next.deployments = {
     ...next.deployments,
-    [network]: { address, deployer, deployedAt: new Date().toISOString() },
+    [network]: record,
   };
   saveState(next, { cwd });
 }

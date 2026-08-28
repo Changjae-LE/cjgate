@@ -367,7 +367,7 @@ async function main() {
   console.log('  ✅ Contract deployed successfully!\n');
   console.log(`  Contract Address: ${contractAddress}\n`);
 
-  recordDeployment(network, contractAddress, address.toString());
+  recordDeployment(network, contractAddress, address.toString(), 'cjgate');
   console.log('  Saved to .midnight-state.json\n');
 
   await persistWalletState(network, walletCtx);
