@@ -334,6 +334,10 @@ export function formatWalletBackupNotice(
   wallet: WalletCredentials,
   network: NetworkId,
 ): string | null {
+  // CJGate's Preprod tooling sets this so the 24-word phrase is never echoed
+  // to a terminal. The phrase is still written to .midnight-state.json
+  // (gitignored, mode 0600) by getOrCreateWallet.
+  if (process.env.CJGATE_QUIET_WALLET) return null;
   if (!wallet.created || !wallet.mnemonic) return null;
   return [
     '',

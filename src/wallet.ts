@@ -57,6 +57,18 @@ function deriveKeys(seed: string) {
   return result.keys;
 }
 
+/**
+ * Derive the public unshielded (bech32 `mn_addr_…`) address for a seed on a
+ * given network, without building a wallet facade or touching the network.
+ * Used by the "show my public address" commands. Returns only public data.
+ */
+export function deriveUnshieldedAddress(seed: string, networkId: string): string {
+  setNetworkId(networkId);
+  const keys = deriveKeys(seed);
+  const keystore = createKeystore(keys[Roles.NightExternal], getNetworkId());
+  return keystore.getBech32Address().toString();
+}
+
 export interface WalletContext {
   wallet: Awaited<ReturnType<typeof WalletFacade.init>>;
   shieldedSecretKeys: ReturnType<typeof ledger.ZswapSecretKeys.fromSeed>;

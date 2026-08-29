@@ -65,9 +65,33 @@ transaction to the local devnet.
 
 Requires `npm run proof-server:start` (node + indexer + proof server). It
 auto-deploys a fresh CJGate contract to the devnet if `.midnight-state.json`
-has no current `cjgate` deployment (or pass `--redeploy`). Local devnet only —
-it refuses to run against `preview`/`preprod`. Never prints scanner findings,
-finding counts, `secretsFound`/`sastHighFindings`, wallet seed, or keys.
+has no current `cjgate` deployment (or pass `--redeploy`). Never prints scanner
+findings, finding counts, `secretsFound`/`sastHighFindings`, wallet seed, or keys.
+
+## Live ZK proof flow (Midnight Preprod)
+
+Same real flow against Midnight Preprod, driven by dedicated commands. It uses a
+**dedicated CJGate wallet** (freshly generated, stored in `.midnight-state.json`
+→ `wallets.preprod`, gitignored, mode 0600) — never a browser-wallet phrase.
+`MIDNIGHT_WALLET_MNEMONIC` / `MIDNIGHT_WALLET_SEED` are ignored on this path. The
+mnemonic/seed are never printed. The proof server is still the local one
+(`npm run proof-server:start`) so witness data stays on your machine.
+
+```sh
+npm run cjgate:preprod:init                 # create (once) + sync the dedicated wallet, print its PUBLIC address + balance
+npm run cjgate:preprod:address              # print ONLY the public Preprod address (fast, no sync)
+# → fund that address at the Preprod faucet (https://midnight-tmnight-preprod.nethermind.dev), then:
+npm run cjgate:preprod:deploy               # deploy the current CJGate contract to Preprod
+npm run cjgate:preprod:live -- --source fixtures/clean   # real Gitleaks + Semgrep + real ZK proof + real Preprod tx → policyPassed = true
+npm run cjgate:preprod:live -- --source fixtures/secret  # BLOCK: assertion fails, no proof, no tx, ledger unchanged
+```
+
+`init` syncs within a bounded budget (`CJGATE_PREPROD_SYNC_TIMEOUT_MS`, default
+8 min), caches progress under `.midnight-wallet-state/preprod/`, and resumes on
+re-run — it never creates a second wallet and never requests faucet funds. The
+Preprod contract address is stored under `deployments.preprod`, distinct from
+the local `deployments.undeployed`. The GitHub Actions workflow is unchanged and
+needs no Preprod credentials.
 
 > **Dependency note:** `package.json` pins `@midnight-ntwrk/onchain-runtime-v3`
 > to `3.0.0` via `overrides` so the generated contract (through
@@ -244,7 +268,11 @@ generated state.
 | `npm run compile`       | Compile the Compact contract.                                  |
 | `npm run verify`        | Local PASS/BLOCK check of the security gate (no devnet).       |
 | `npm run cjgate:check`  | Real Gitleaks + Semgrep, Compact policy evaluated locally (no proof). |
-| `npm run cjgate:live`   | Real scanners + real ZK proof + real devnet transaction.       |
+| `npm run cjgate:live`   | Real scanners + real ZK proof + real local-devnet transaction. |
+| `npm run cjgate:preprod:init`    | Create (once) + sync the dedicated CJGate Preprod wallet; print public address + balance. |
+| `npm run cjgate:preprod:address` | Print ONLY the public Preprod wallet address.                  |
+| `npm run cjgate:preprod:deploy`  | Deploy the current CJGate contract to Midnight Preprod.        |
+| `npm run cjgate:preprod:live`    | Real scanners + real ZK proof + real Preprod transaction.      |
 | `npm run deploy`        | Deploy the compiled contract (requires devnet up + compiled).  |
 | `npm run cli`           | Interactive CLI: run the gate / read policy status / balance.  |
 | `npm run check-balance` | Print the genesis-seed wallet's NIGHT and DUST balances.       |

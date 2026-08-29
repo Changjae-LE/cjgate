@@ -8,6 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, recordDeployment } from './network';
 import { createWallet, persistWalletState, unshieldedToken, type WalletContext } from './wallet';
+import { ensureDustRegistered } from './dust-registration';
 import { witnesses, cleanCJGatePrivateState } from './witnesses';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
@@ -222,38 +223,14 @@ async function main() {
     }
   }
 
-  // Register for DUST.
+  // Register NIGHT UTXOs for DUST generation. Idempotent and resilient to
+  // transient RPC/WebSocket disconnects: `ensureDustRegistered` re-syncs and
+  // re-checks on-chain registration + DUST balance before every (re)submission,
+  // retries only connection-shaped failures with bounded backoff, fails with a
+  // sanitized error on a permanent chain rejection, and — on success — waits
+  // (bounded) for the DUST balance to become positive before returning.
   console.log('─── DUST Token Setup ───────────────────────────────────────────\n');
-  const dustState = await Rx.firstValueFrom(walletCtx.wallet.state().pipe(Rx.filter((s) => s.isSynced)));
-
-  const unregisteredUtxos = dustState.unshielded.availableCoins.filter(
-    (c: any) => !c.meta?.registeredForDustGeneration,
-  );
-  if (unregisteredUtxos.length > 0) {
-    console.log(`  Registering ${unregisteredUtxos.length} NIGHT UTXOs for DUST generation...`);
-    // The signDustRegistration callback (3rd arg) already produces a recipe
-    // with N signatures matching N inputs. Do NOT call signRecipe again — that
-    // would double-sign and the chain rejects with InputsSignaturesLengthMismatch
-    // (Custom error 192). Matches upstream example-counter and example-bboard.
-    const recipe = await walletCtx.wallet.registerNightUtxosForDustGeneration(
-      unregisteredUtxos,
-      walletCtx.unshieldedKeystore.getPublicKey(),
-      (payload) => walletCtx.unshieldedKeystore.signData(payload),
-    );
-    const finalized = await walletCtx.wallet.finalizeRecipe(recipe);
-    await walletCtx.wallet.submitTransaction(finalized);
-  }
-
-  if (dustState.dust.balance(new Date()) === 0n) {
-    console.log('  Waiting for DUST tokens...');
-    await Rx.firstValueFrom(
-      walletCtx.wallet.state().pipe(
-        Rx.throttleTime(5000),
-        Rx.filter((s) => s.isSynced),
-        Rx.filter((s) => s.dust.balance(new Date()) > 0n),
-      ),
-    );
-  }
+  await ensureDustRegistered({ walletCtx, network, log: (m) => console.log(m) });
   console.log('  DUST tokens ready!\n');
 
   // Deploy.

@@ -1,10 +1,16 @@
 /**
- * `npm run cjgate:live [-- --source <path>] [--redeploy]`
+ * `npm run cjgate:live [-- --network <id>] [--source <path>] [--redeploy]`
  *
- * The REAL Midnight zero-knowledge proof flow for CJGate, against the local
- * devnet only. Distinct from `npm run cjgate:check` (which evaluates the
- * Compact policy in-process with no proof server, no wallet, no chain — that
- * is the CI path and is left untouched).
+ * The REAL Midnight zero-knowledge proof flow for CJGate. Defaults to the
+ * local devnet (`undeployed`); `--network preprod` runs it against Midnight
+ * Preprod (normally invoked via `npm run cjgate:preprod:live`). Distinct from
+ * `npm run cjgate:check` (which evaluates the Compact policy in-process with no
+ * proof server, no wallet, no chain — that is the CI path and is left
+ * untouched).
+ *
+ * Local devnet: a missing/stale deployment is auto-deployed. Public networks
+ * (preprod): the wallet and contract must already exist — this script never
+ * creates a wallet, never requests faucet funds, and never auto-deploys.
  *
  * What this does:
  *   1. Runs the REAL scanners over the source path:
@@ -42,7 +48,7 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-js';
 
-import { resolveNetwork, getOrCreateWallet, getDeployment } from '../src/network.js';
+import { resolveNetwork, getOrCreateWallet, getDeployment, loadState, type NetworkId } from '../src/network.js';
 import { createWallet, persistWalletState, unshieldedToken, type WalletContext } from '../src/wallet.js';
 import { witnesses, createCJGatePrivateState, cleanCJGatePrivateState } from '../src/witnesses.js';
 import { runGitleaksScan } from '../src/scanners/gitleaks.js';
@@ -97,11 +103,28 @@ const compiledContract: any = (CompiledContract.make(CONTRACT_NAME, CJGate.Contr
 
 // ── deployment freshness ─────────────────────────────────────────────────────
 async function ensureFreshDeployment(
+  network: NetworkId,
   networkConfig: { indexer: string; indexerWS: string },
   redeploy: boolean,
 ): Promise<string> {
-  const existing = getDeployment('undeployed');
+  const existing = getDeployment(network);
 
+  // Public networks: never auto-deploy or auto-fund. The contract must already
+  // be on record (put there by `npm run cjgate:preprod:deploy`).
+  if (network !== 'undeployed') {
+    if (!existing) {
+      fail(`no CJGate contract recorded for ${network} — run: npm run cjgate:${network}:deploy`);
+    }
+    if (existing.contract !== CONTRACT_NAME) {
+      fail(
+        `recorded ${network} deployment is for "${existing.contract ?? 'unknown'}", not "${CONTRACT_NAME}" — redeploy with: npm run cjgate:${network}:deploy`,
+      );
+    }
+    console.log(`Using the CJGate contract recorded for ${network}.`);
+    return existing.address;
+  }
+
+  // Local devnet: auto-deploy when missing / stale / for another contract.
   let reason: string | null = null;
   if (redeploy) reason = '--redeploy requested';
   else if (!existing) reason = 'no deployment on file';
@@ -206,12 +229,25 @@ async function main() {
   console.log(`  source:  ${source}`);
   console.log('');
 
+  if (network !== 'undeployed' && network !== 'preprod') {
+    fail(`live flow supports "undeployed" and "preprod"; active network is "${network}".`);
+  }
+
   if (network !== 'undeployed') {
-    fail(`live flow is local-devnet only; active network is "${network}". Run: npm run network undeployed`);
+    // Dedicated CJGate wallet only — never a browser-wallet phrase/seed, and
+    // never silently created here.
+    if (process.env.MIDNIGHT_WALLET_MNEMONIC || process.env.MIDNIGHT_WALLET_SEED) {
+      console.log('  note: ignoring MIDNIGHT_WALLET_* — CJGate Preprod uses its own dedicated wallet');
+      delete process.env.MIDNIGHT_WALLET_MNEMONIC;
+      delete process.env.MIDNIGHT_WALLET_SEED;
+    }
+    if (!loadState()?.wallets?.[network]) {
+      fail(`no dedicated CJGate ${network} wallet — run: npm run cjgate:${network}:init`);
+    }
   }
 
   // ── infra health ───────────────────────────────────────────────────────────
-  console.log('Checking local devnet health...');
+  console.log(`Checking ${network} + proof-server health...`);
   if (!(await proofServerHealthy(networkConfig.proofServer))) {
     fail(`proof server not healthy at ${networkConfig.proofServer} — run: npm run proof-server:start`);
   }
@@ -240,7 +276,7 @@ async function main() {
   console.log('  node, indexer, proof server: healthy\n');
 
   // ── deployment ─────────────────────────────────────────────────────────────
-  const contractAddress = await ensureFreshDeployment(networkConfig, redeploy);
+  const contractAddress = await ensureFreshDeployment(network, networkConfig, redeploy);
   console.log(`  contract address: ${contractAddress}\n`);
 
   // ── real scanners -> PRIVATE signals ──────────────────────────────────────
@@ -262,8 +298,10 @@ async function main() {
   console.log('');
 
   // ── wallet + providers ────────────────────────────────────────────────────
-  const seed = getOrCreateWallet(network).seed; // genesis seed on undeployed
-  console.log('Connecting wallet to the local devnet (syncing)...');
+  // undeployed → genesis seed; preprod → the persisted dedicated CJGate wallet
+  // (guaranteed to exist by the guard above; never created here).
+  const seed = getOrCreateWallet(network).seed;
+  console.log(`Connecting wallet to ${network} (syncing)...`);
   const walletCtx = await createWallet({ network, networkConfig, seed });
   await walletCtx.wallet.waitForSyncedState();
   await persistWalletState(network, walletCtx);
