@@ -1,316 +1,428 @@
-# cjgate
+# CJGate
 
-CJGate — a privacy-preserving DevSecOps security gate on Midnight, scaffolded
-with create-mn-app.
+**Privacy-preserving DevSecOps security gates powered by Midnight zero-knowledge proofs.**
 
-## What CJGate does
+CJGate scans a software repository with real security tools while keeping the underlying security findings private. A Midnight Compact contract verifies that the repository satisfies the required security policy, allowing the project to prove compliance without revealing the scanner findings or their counts.
 
-The `contracts/cjgate.compact` contract enforces one security policy:
+## Why CJGate?
 
-```
-secretsFound == 0  AND  sastHighFindings == 0
-```
+Traditional CI/CD security pipelines often expose detailed scanner results to logs, dashboards, or third-party systems.
 
-`secretsFound` and `sastHighFindings` are **private** signals supplied by the
-local prover (witnesses). Their numeric values never enter the ledger, the
-public transcript, or any log.
+Those findings may reveal sensitive information such as:
 
-- Both zero → the `runSecurityGate` circuit succeeds and the public ledger
-  field `policyPassed` becomes `true`.
-- Either non-zero → an in-circuit `assert` fails, the proof is never produced,
-  and no state transition occurs.
+- exposed credential locations
+- vulnerable source code
+- internal implementation details
+- dependency weaknesses
+- security posture information
 
-Scanner integration (Gitleaks, Semgrep) is **not** wired up yet — the counts
-are provided directly for now.
+CJGate separates **security evidence** from **security verification**.
 
-## Local verification (no devnet)
+The findings remain private, while Midnight is used to prove that the security policy was satisfied.
 
-`npm run verify` runs the compiled gate in-process against the Compact JS
-runtime and checks three cases:
+## Security policy
 
-| Input                              | Expected |
-| ---------------------------------- | -------- |
-| clean (0 secrets, 0 SAST high)     | PASS     |
-| secret violation (1 secret)        | BLOCK    |
-| SAST violation (1 SAST high)       | BLOCK    |
+CJGate currently integrates two real DevSecOps scanners:
 
-It prints only the pass/block outcome and the public `policyPassed` value —
-never the private counts.
+- **Gitleaks** for secret detection
+- **Semgrep** for static application security testing
 
-## CI security gate
+Their results are normalized into two private signals:
 
-`.github/workflows/cjgate-security-gate.yml` runs the full `npm run cjgate:check`
-pipeline on every push to `main` and every PR targeting `main`: Node 22 + `npm ci`,
-a pinned Gitleaks, the Docker-based Semgrep scanner, the Compact compiler pinned
-to 0.31.1, `npm run build`, `npm run compile`, the three fixtures, and a
-whole-repository scan. A repository-scan **BLOCK** fails the job; the vulnerable
-fixtures are asserted to return a non-zero exit without failing the run. The job
-uses `permissions: contents: read`, needs no repository secrets, starts no
-Midnight services, and generates no live ZK proof — the Compact policy is only
-evaluated locally.
-
-## Live ZK proof flow (local devnet)
-
-`npm run cjgate:live [-- --source <path>]` is the real thing, and is **separate
-from `cjgate:check`/CI**: it runs the same real scanners, keeps both results
-private, then invokes the deployed CJGate contract through the local Midnight
-proof server, generates a genuine zero-knowledge proof, and submits a real
-transaction to the local devnet.
-
-- Clean source → real proof + transaction; public `policyPassed` becomes `true`.
-  The command prints the contract address, transaction id, and safe
-  proof-server activity (request/timing counts only).
-- Policy violation → the in-circuit assertion rejects the transition: no proof
-  is requested, no transaction is submitted, the ledger is unchanged.
-
-Requires `npm run proof-server:start` (node + indexer + proof server). It
-auto-deploys a fresh CJGate contract to the devnet if `.midnight-state.json`
-has no current `cjgate` deployment (or pass `--redeploy`). Never prints scanner
-findings, finding counts, `secretsFound`/`sastHighFindings`, wallet seed, or keys.
-
-## Live ZK proof flow (Midnight Preprod)
-
-Same real flow against Midnight Preprod, driven by dedicated commands. It uses a
-**dedicated CJGate wallet** (freshly generated, stored in `.midnight-state.json`
-→ `wallets.preprod`, gitignored, mode 0600) — never a browser-wallet phrase.
-`MIDNIGHT_WALLET_MNEMONIC` / `MIDNIGHT_WALLET_SEED` are ignored on this path. The
-mnemonic/seed are never printed. The proof server is still the local one
-(`npm run proof-server:start`) so witness data stays on your machine.
-
-```sh
-npm run cjgate:preprod:init                 # create (once) + sync the dedicated wallet, print its PUBLIC address + balance
-npm run cjgate:preprod:address              # print ONLY the public Preprod address (fast, no sync)
-# → fund that address at the Preprod faucet (https://midnight-tmnight-preprod.nethermind.dev), then:
-npm run cjgate:preprod:deploy               # deploy the current CJGate contract to Preprod
-npm run cjgate:preprod:live -- --source fixtures/clean   # real Gitleaks + Semgrep + real ZK proof + real Preprod tx → policyPassed = true
-npm run cjgate:preprod:live -- --source fixtures/secret  # BLOCK: assertion fails, no proof, no tx, ledger unchanged
+```text
+secretsFound
+sastHighFindings
 ```
 
-`init` syncs within a bounded budget (`CJGATE_PREPROD_SYNC_TIMEOUT_MS`, default
-8 min), caches progress under `.midnight-wallet-state/preprod/`, and resumes on
-re-run — it never creates a second wallet and never requests faucet funds. The
-Preprod contract address is stored under `deployments.preprod`, distinct from
-the local `deployments.undeployed`. The GitHub Actions workflow is unchanged and
-needs no Preprod credentials.
+The Compact contract enforces:
 
-> **Dependency note:** `package.json` pins `@midnight-ntwrk/onchain-runtime-v3`
-> to `3.0.0` via `overrides` so the generated contract (through
-> `compact-runtime`) and `midnight-js-protocol@4.1.1` share one
-> `StateValue`/`ChargedState` class. Without the pin, `compact-runtime` floats
-> to `3.1.0` and the live `callTx` fails with `expected instance of StateValue`.
+```text
+secretsFound == 0
+AND
+sastHighFindings == 0
+```
 
-## Quick start
+These values are supplied as private witnesses and are never written to the public ledger.
 
-Requirements: Node 22, Docker (with Compose v2), and the Compact compiler at the version pinned in `.compact-version` at the create-mn-app repo root (the version this project was scaffolded against).
+Only the public policy state is exposed:
+
+```text
+policyPassed = true
+```
+
+If either private value violates the policy, the Compact assertion fails before a valid state transition is produced.
+
+## Architecture
+
+```text
+                     ┌─────────────────┐
+                     │   Repository    │
+                     └────────┬────────┘
+                              │
+                 ┌────────────┴────────────┐
+                 │                         │
+          ┌──────▼──────┐           ┌──────▼──────┐
+          │  Gitleaks   │           │   Semgrep   │
+          │ Secret Scan │           │  SAST Scan  │
+          └──────┬──────┘           └──────┬──────┘
+                 │                         │
+                 └────────────┬────────────┘
+                              │
+                    Private security signals
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │ Midnight Compact │
+                    │  Security Policy │
+                    └────────┬─────────┘
+                             │
+                   ┌─────────┴─────────┐
+                   │                   │
+                 PASS                BLOCK
+                   │                   │
+                   ▼                   ▼
+             ZK proof + tx        No proof
+                   │              No transaction
+                   ▼
+          Midnight Preprod
+                   │
+                   ▼
+          policyPassed = true
+```
+
+## Two execution paths
+
+CJGate provides two separate execution paths.
+
+### 1. CI security gate
 
 ```bash
-npm install
-npm run setup
-npm run test:e2e
+npm run cjgate:check
 ```
 
-`npm run setup` runs end-to-end with no prompts:
+The GitHub Actions workflow runs on pushes to `main` and pull requests targeting `main`.
 
-1. `docker compose up -d --wait` — starts a local Midnight devnet (node, indexer, proof-server) and blocks until all three pass their healthchecks.
-2. `npm run compile` — compiles `contracts/cjgate.compact` to `contracts/managed/cjgate/`.
-3. `npm run deploy` — derives the genesis-seed wallet (NIGHT pre-minted), registers UTXOs for DUST generation, deploys the contract (with a clean scan state), writes `.midnight-state.json`.
+It performs:
 
-`npm run test:e2e` reconnects to the deployed contract and reads its ledger state. Exits 0 if the contract is live and indexable.
+```text
+Gitleaks
+    +
+Semgrep
+    ↓
+Private security signals
+    ↓
+Compact policy evaluation
+    ↓
+PASS / BLOCK
+```
 
-## Local devnet
+The CI path evaluates the Compact policy locally and does not require a wallet, Midnight node, or Preprod credentials.
 
-The project ships its own devnet via `docker-compose.yml`:
+A clean repository produces a successful GitHub Actions run.
 
-| Service        | Port | Purpose                                         |
-| -------------- | ---- | ----------------------------------------------- |
-| `node`         | 9944 | Midnight node, `dev` chain preset               |
-| `indexer`      | 8088 | GraphQL indexer for chain state                 |
-| `proof-server` | 6300 | Generates ZK proofs for contract transactions   |
+A repository that violates the security policy causes the real repository scan to return a non-zero exit code and the GitHub Actions job fails.
 
-State lives in container-managed volumes. Tear everything down with:
+### 2. Live Midnight ZK proof
 
 ```bash
-docker compose down -v
+npm run cjgate:live -- --source fixtures/clean
 ```
 
-That removes all containers, networks, and volumes. The next `npm run setup` starts from a clean slate.
+The live path connects the real scanner results to the deployed CJGate contract and uses the Midnight proof server to generate a real zero-knowledge proof.
 
-## ⚠️ LOCAL DEVNET ONLY
+For a clean repository:
 
-The deploy script uses a well-known genesis seed (`0000…0001`) so the
-pre-minted NIGHT in the `dev` chain preset is immediately available. **Do
-not use this seed against Preprod, mainnet, or any environment that
-handles real value** — anyone running this devnet has full access to
-funds at this seed.
-
-## Networks
-
-This DApp supports three networks:
-
-| Network | When to use | Default? |
-|---|---|---|
-| `undeployed` | Local devnet bundled in `docker-compose.yml`. Genesis seed is hardcoded; no funding needed. | yes |
-| `preview` | Public preview testnet. Faucet at `https://midnight-tmnight-preview.nethermind.dev`. |  |
-| `preprod` | Public preprod testnet. Faucet at `https://midnight-tmnight-preprod.nethermind.dev`. |  |
-
-The active network is **sticky**: whichever network you last interacted
-with stays active until you switch. Any command run with `--network <name>`
-also sets that network active for subsequent commands. The default on a
-fresh project is `undeployed` (local devnet).
-
-```sh
-npm run setup -- --network preview   # runs on preview AND makes it active
-npm run cli                          # still uses preview
-npm run check-balance                # still uses preview
+```text
+Gitleaks + Semgrep
+        ↓
+private witnesses
+        ↓
+Compact contract
+        ↓
+Midnight Proof Server
+        ↓
+real ZK proof
+        ↓
+Midnight transaction
+        ↓
+policyPassed = true
 ```
 
-You can also switch without running anything else:
+For a policy violation:
 
-```sh
-npm run network preview         # active network is now preview
-npm run network                 # prints current active network
-npm run network undeployed      # switch back to local devnet
+```text
+security violation
+        ↓
+Compact assertion fails
+        ↓
+no proof
+no transaction
+no state change
 ```
 
-### How wallets work across networks
+## Midnight Preprod deployment
 
-- `undeployed` uses a hardcoded genesis seed. Local devnet pre-funds it.
-- `preview` and `preprod` generate a fresh wallet on first use: a 24-word
-  BIP-39 recovery phrase (printed once) plus its derived seed, both stored
-  in `.midnight-state.json` (gitignored). The wallet survives switching
-  networks — switch back later and your funded wallet returns.
-- **Back up your recovery phrase** if you fund a public-network wallet you
-  care about. It is printed when the wallet is created and kept in
-  `.midnight-state.json` under `wallets.<network>.mnemonic`. Anyone holding
-  the phrase controls the wallet.
-- Wallets created before mnemonic support keep working from their stored
-  `seed`; they just have no phrase to import into Lace.
+CJGate has been deployed and verified on Midnight Preprod.
 
-### Using the same wallet as Lace
+**Contract address**
 
-Seeds are derived with the standard BIP-39 `mnemonicToSeed` step — the same
-convention Lace uses — so identity is portable in both directions:
+```text
+c0fb1764ead1c0aa4196f1dfa6ae6657b6d4cb4a8fcab60fff94dbb317875066
+```
 
-- **Bring your Lace wallet here**: pass your recovery phrase via the
-  `MIDNIGHT_WALLET_MNEMONIC` env var — the derived addresses match Lace.
-  To keep the phrase out of your shell history, enter it with a hidden
-  prompt instead of typing it inline:
+**Verified PASS transaction**
 
-  ```bash
-  read -s MIDNIGHT_WALLET_MNEMONIC && export MIDNIGHT_WALLET_MNEMONIC
-  npm run deploy
-  ```
-- **Take a scaffold wallet to Lace**: restore Lace from the 24-word phrase
-  in `.midnight-state.json`.
+```text
+00011d8c27cb17b22ed12f129ac275f7becea0f3d7fe629c83111e6ca9e2ca2343
+```
 
-### Funding a public-network wallet
+**Block height**
 
-On the first run with `--network preview` (or `preprod`):
+```text
+2308502
+```
 
-1. `setup` will print your wallet address and the faucet URL.
-2. Open the faucet URL, paste the address, request tNIGHT.
-3. `setup` polls the wallet balance every 10 s and continues automatically
-   once funds arrive.
-4. The default poll budget is 10 minutes. Override with
-   `MIDNIGHT_FAUCET_TIMEOUT_MS=1800000` (30 min) for unattended runs.
+During the successful Preprod execution:
 
-If the faucet is slow or the script times out, your seed is preserved.
-Re-run `npm run setup -- --network preview` once the funds land.
+```text
+policyPassed: false → true
+proofProvider.proveTx calls: 1
+walletProvider.submitTx calls: 1
+POST /prove requests: 2
+POST /check requests: 1
+```
 
-### Environment overrides
+For both the synthetic secret violation and SAST violation:
 
-These env vars override the active network's config (no per-network
-suffix — they apply to whichever network is active for the run):
+```text
+proveTx calls: 0
+submitTx calls: 0
+POST /prove requests: 0
+policyPassed remained unchanged
+```
 
-| Variable | Effect |
+This confirms that policy violations are rejected before proof generation or transaction submission.
+
+## Privacy model
+
+CJGate does not expose:
+
+- secret contents
+- Gitleaks findings
+- Semgrep findings
+- vulnerable source snippets
+- scanner finding counts
+- `secretsFound`
+- `sastHighFindings`
+- wallet mnemonics
+- wallet private keys
+
+The public blockchain only needs to observe the resulting policy state.
+
+## Local verification
+
+Compile the Compact contract:
+
+```bash
+npm run compile
+```
+
+Validate TypeScript:
+
+```bash
+npm run build
+```
+
+Test the Compact policy without a network:
+
+```bash
+npm run verify
+```
+
+Expected behavior:
+
+| Test | Result |
 |---|---|
-| `MIDNIGHT_WALLET_SEED` | Use this hex seed (32-128 hex chars; a Lace-compatible BIP-39 seed is 128) instead of generating/persisting one. Useful for CI with a pre-funded wallet. |
-| `MIDNIGHT_WALLET_MNEMONIC` | Use this BIP-39 recovery phrase instead of generating a wallet — e.g. your Lace phrase, for the same addresses as Lace. Not persisted. Set only one of seed/mnemonic. |
-| `MIDNIGHT_INDEXER_URL` | Override the indexer GraphQL URL. |
-| `MIDNIGHT_INDEXER_WS_URL` | Override the indexer WS URL. |
-| `MIDNIGHT_NODE_URL` | Override the node RPC URL. |
-| `MIDNIGHT_FAUCET_URL` | Override the faucet URL printed during setup. |
-| `MIDNIGHT_PROOF_SERVER_URL` | Override the proof server URL — set to a public proof server (e.g. `https://lace-proof-pub.preview.midnight.network`) to skip running one locally. |
-| `MIDNIGHT_FAUCET_TIMEOUT_MS` | Faucet poll budget in milliseconds (default 600000 = 10 min). |
+| Clean input | PASS |
+| Secret violation | BLOCK |
+| SAST violation | BLOCK |
 
-By default all networks use the **local** proof server. Public proof
-servers exist (see the env override above) but the local default keeps
-your witness data on your machine and avoids depending on a remote
-service for the deploy hot path.
+## Real scanner tests
 
-### Switching back to local devnet
+Clean fixture:
 
-```sh
-npm run network undeployed     # or: npm run setup -- --network undeployed
+```bash
+npm run cjgate:check -- --source fixtures/clean
 ```
 
-Your preview/preprod wallet seeds and deploy addresses stay in
-`.midnight-state.json`. Switch back later, and they're still there.
+Expected:
 
-### Wallet sync cache
+```text
+Gitleaks scan completed
+Semgrep scan completed
 
-After each `deploy`, `cli`, or `check-balance` run, the scripts serialize the
-wallet's synced state to `.midnight-wallet-state/<network>/` (gitignored).
-The next run on the same network restores from that snapshot and only catches
-up to the latest block instead of replaying from genesis — meaningful on
-`preview` / `preprod` where a from-seed sync takes minutes.
+Security policy passed
+```
 
-If the cache is stale or corrupt (e.g. after an SDK upgrade with an
-incompatible state format) the wallet falls back to a fresh from-seed sync
-with a one-line warning. `npm run clean` removes the cache along with other
-generated state.
+Secret violation:
 
-## Available scripts
+```bash
+npm run cjgate:check -- --source fixtures/secret
+```
 
-| Script                  | Description                                                    |
-| ----------------------- | -------------------------------------------------------------- |
-| `npm run setup`         | One-shot: start devnet, compile, deploy.                       |
-| `npm run compile`       | Compile the Compact contract.                                  |
-| `npm run verify`        | Local PASS/BLOCK check of the security gate (no devnet).       |
-| `npm run cjgate:check`  | Real Gitleaks + Semgrep, Compact policy evaluated locally (no proof). |
-| `npm run cjgate:live`   | Real scanners + real ZK proof + real local-devnet transaction. |
-| `npm run cjgate:preprod:init`    | Create (once) + sync the dedicated CJGate Preprod wallet; print public address + balance. |
-| `npm run cjgate:preprod:address` | Print ONLY the public Preprod wallet address.                  |
-| `npm run cjgate:preprod:deploy`  | Deploy the current CJGate contract to Midnight Preprod.        |
-| `npm run cjgate:preprod:live`    | Real scanners + real ZK proof + real Preprod transaction.      |
-| `npm run deploy`        | Deploy the compiled contract (requires devnet up + compiled).  |
-| `npm run cli`           | Interactive CLI: run the gate / read policy status / balance.  |
-| `npm run check-balance` | Print the genesis-seed wallet's NIGHT and DUST balances.       |
-| `npm run test:e2e`      | Smoke + read-back check against the deployed contract.         |
-| `npm run clean`         | Remove `contracts/managed/`, `.midnight-state.json`, and `.midnight-wallet-state/`. |
-| `npm run proof-server:start` / `:stop` | Compose lifecycle for just the proof-server service. |
+Expected:
+
+```text
+Security policy blocked
+```
+
+SAST violation:
+
+```bash
+npm run cjgate:check -- --source fixtures/sast
+```
+
+Expected:
+
+```text
+Security policy blocked
+```
+
+## Local Midnight proof flow
+
+Start the Midnight services:
+
+```bash
+npm run proof-server:start
+```
+
+Run a clean live proof:
+
+```bash
+npm run cjgate:live -- --source fixtures/clean
+```
+
+Test blocked flows:
+
+```bash
+npm run cjgate:live -- --source fixtures/secret
+npm run cjgate:live -- --source fixtures/sast
+```
+
+## Preprod commands
+
+Initialize and synchronize the dedicated CJGate Preprod wallet:
+
+```bash
+npm run cjgate:preprod:init
+```
+
+Show only its public address:
+
+```bash
+npm run cjgate:preprod:address
+```
+
+Deploy the CJGate contract:
+
+```bash
+npm run cjgate:preprod:deploy
+```
+
+Run a real Preprod proof:
+
+```bash
+npm run cjgate:preprod:live -- --source fixtures/clean
+```
+
+Verify blocked cases:
+
+```bash
+npm run cjgate:preprod:live -- --source fixtures/secret
+npm run cjgate:preprod:live -- --source fixtures/sast
+```
+
+Wallet synchronization state and deployment state are stored locally in gitignored files.
+
+## GitHub Actions
+
+Workflow:
+
+```text
+.github/workflows/cjgate-security-gate.yml
+```
+
+The workflow runs:
+
+1. Node.js 22 setup
+2. `npm ci`
+3. Gitleaks 8.30.1
+4. Semgrep 1.174.0
+5. Compact compiler 0.31.1
+6. Compact compilation
+7. TypeScript validation
+8. Clean fixture validation
+9. Secret BLOCK validation
+10. SAST BLOCK validation
+11. Real repository security scan
+
+The repository scan returns a failing GitHub Actions job when CJGate blocks the repository.
+
+## Tech stack
+
+- Midnight
+- Compact
+- Zero-Knowledge Proofs
+- TypeScript
+- Node.js
+- Gitleaks
+- Semgrep
+- GitHub Actions
+- Docker
+- DevSecOps
+- CI/CD
 
 ## Project structure
 
-```
+```text
 cjgate/
+├── .github/
+│   └── workflows/
+│       └── cjgate-security-gate.yml
+│
 ├── contracts/
-│   └── cjgate.compact          # Compact source — the security gate
+│   └── cjgate.compact
+│
+├── fixtures/
+│   ├── clean/
+│   ├── secret/
+│   └── sast/
+│
 ├── scripts/
-│   ├── policy-check.ts         # local PASS/BLOCK verification (`npm run verify`)
-│   └── e2e-check.ts            # smoke + read-back
+│   ├── cjgate-check.ts
+│   ├── cjgate-live.ts
+│   ├── cjgate-preprod.ts
+│   └── policy-check.ts
+│
 ├── src/
-│   ├── witnesses.ts            # private scan signals + witness implementations
-│   ├── network.ts              # network selection + state file management
-│   ├── wallet.ts               # wallet construction + sync-state cache
-│   ├── setup.ts                # orchestrator for `npm run setup`
-│   ├── deploy.ts               # deploy the contract
-│   ├── cli.ts                  # interact with deployed contract
-│   └── check-balance.ts        # NIGHT / DUST balance
-├── docker-compose.yml          # node + indexer + proof-server
-├── .midnight-state.json        # written by deploy (gitignored)
-├── .midnight-wallet-state/     # serialized sync state per network (gitignored)
+│   ├── scanners/
+│   │   ├── gitleaks.ts
+│   │   └── semgrep.ts
+│   ├── live/
+│   ├── dust-registration.ts
+│   ├── policy.ts
+│   ├── witnesses.ts
+│   ├── deploy.ts
+│   ├── network.ts
+│   └── wallet.ts
+│
+├── docker-compose.yml
 ├── package.json
-└── tsconfig.json
+└── README.md
 ```
 
-## Compact compiler version
+## What CJGate demonstrates
 
-`.compact-version` at the create-mn-app repo root pinned the compiler
-version this project was scaffolded against. To upgrade your local
-compiler to that version:
+CJGate demonstrates that DevSecOps security verification does not require publishing the underlying security findings.
 
-```bash
-compact update <version>
-compact use <version>
-```
+By combining real security scanners with Midnight private witnesses and zero-knowledge proofs, a repository can prove that it satisfies a security policy while keeping sensitive security evidence private.
