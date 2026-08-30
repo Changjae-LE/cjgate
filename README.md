@@ -4,6 +4,14 @@
 
 CJGate scans a software repository with real security tools while keeping the underlying security findings private. A Midnight Compact contract verifies that the repository satisfies the required security policy, allowing the project to prove compliance without revealing the scanner findings or their counts.
 
+## Architecture
+
+![CJGate Architecture](docs/cjgate-architecture.png)
+
+CJGate runs Gitleaks and Semgrep locally and converts their results into private security signals. Midnight Compact evaluates those signals as private witnesses.
+
+A clean repository can generate a real zero-knowledge proof and submit a transaction to Midnight Preprod, while a policy violation is rejected before proof generation or transaction submission.
+
 ## Why CJGate?
 
 Traditional CI/CD security pipelines often expose detailed scanner results to logs, dashboards, or third-party systems.
@@ -13,7 +21,6 @@ Those findings may reveal sensitive information such as:
 - exposed credential locations
 - vulnerable source code
 - internal implementation details
-- dependency weaknesses
 - security posture information
 
 CJGate separates **security evidence** from **security verification**.
@@ -52,44 +59,6 @@ policyPassed = true
 
 If either private value violates the policy, the Compact assertion fails before a valid state transition is produced.
 
-## Architecture
-
-```text
-                     ┌─────────────────┐
-                     │   Repository    │
-                     └────────┬────────┘
-                              │
-                 ┌────────────┴────────────┐
-                 │                         │
-          ┌──────▼──────┐           ┌──────▼──────┐
-          │  Gitleaks   │           │   Semgrep   │
-          │ Secret Scan │           │  SAST Scan  │
-          └──────┬──────┘           └──────┬──────┘
-                 │                         │
-                 └────────────┬────────────┘
-                              │
-                    Private security signals
-                              │
-                              ▼
-                    ┌──────────────────┐
-                    │ Midnight Compact │
-                    │  Security Policy │
-                    └────────┬─────────┘
-                             │
-                   ┌─────────┴─────────┐
-                   │                   │
-                 PASS                BLOCK
-                   │                   │
-                   ▼                   ▼
-             ZK proof + tx        No proof
-                   │              No transaction
-                   ▼
-          Midnight Preprod
-                   │
-                   ▼
-          policyPassed = true
-```
-
 ## Two execution paths
 
 CJGate provides two separate execution paths.
@@ -116,7 +85,7 @@ Compact policy evaluation
 PASS / BLOCK
 ```
 
-The CI path evaluates the Compact policy locally and does not require a wallet, Midnight node, or Preprod credentials.
+The CI path evaluates the Compact policy locally and does not require a wallet, Midnight node, proof server, or Preprod credentials.
 
 A clean repository produces a successful GitHub Actions run.
 
@@ -128,7 +97,7 @@ A repository that violates the security policy causes the real repository scan t
 npm run cjgate:live -- --source fixtures/clean
 ```
 
-The live path connects the real scanner results to the deployed CJGate contract and uses the Midnight proof server to generate a real zero-knowledge proof.
+The live path connects the real scanner results to the deployed CJGate contract and uses the Midnight Proof Server to generate a real zero-knowledge proof.
 
 For a clean repository:
 
@@ -164,25 +133,27 @@ no state change
 
 CJGate has been deployed and verified on Midnight Preprod.
 
-**Contract address**
+### Contract address
 
 ```text
 c0fb1764ead1c0aa4196f1dfa6ae6657b6d4cb4a8fcab60fff94dbb317875066
 ```
 
-**Verified PASS transaction**
+### Initial verified PASS transaction
+
+This transaction changed the public policy state from `false` to `true`.
 
 ```text
 00011d8c27cb17b22ed12f129ac275f7becea0f3d7fe629c83111e6ca9e2ca2343
 ```
 
-**Block height**
+Block height:
 
 ```text
 2308502
 ```
 
-During the successful Preprod execution:
+During that successful Preprod execution:
 
 ```text
 policyPassed: false → true
@@ -192,13 +163,52 @@ POST /prove requests: 2
 POST /check requests: 1
 ```
 
+### Latest live demo transaction
+
+CJGate was also re-executed against the same deployed Preprod contract to verify that the live proof path continues to generate a real proof and transaction.
+
+```text
+00feddc7c027be9b4deae4615a10cbf196e77fa7520e1b7caee057a4175c13c7ee
+```
+
+Block height:
+
+```text
+2327106
+```
+
+During this invocation:
+
+```text
+policyPassed (before): true
+policyPassed (after):  true
+
+proofProvider.proveTx calls: 1
+walletProvider.submitTx calls: 1
+POST /prove requests: 2
+POST /check requests: 1
+proof ok log lines: 2
+```
+
+The state was already `true` from the earlier successful proof, but this invocation generated a new real zero-knowledge proof and submitted a new Midnight Preprod transaction.
+
+### Verified BLOCK behavior
+
 For both the synthetic secret violation and SAST violation:
 
 ```text
 proveTx calls: 0
 submitTx calls: 0
 POST /prove requests: 0
+POST /check requests: 0
 policyPassed remained unchanged
+```
+
+The result is:
+
+```text
+BLOCK — Compact assertion rejected the state transition
+no proof requested, no transaction submitted
 ```
 
 This confirms that policy violations are rejected before proof generation or transaction submission.
@@ -211,6 +221,7 @@ CJGate does not expose:
 - Gitleaks findings
 - Semgrep findings
 - vulnerable source snippets
+- matched strings
 - scanner finding counts
 - `secretsFound`
 - `sastHighFindings`
@@ -293,7 +304,7 @@ Security policy blocked
 Start the Midnight services:
 
 ```bash
-npm run proof-server:start
+npm run setup
 ```
 
 Run a clean live proof:
@@ -389,6 +400,9 @@ cjgate/
 ├── .github/
 │   └── workflows/
 │       └── cjgate-security-gate.yml
+│
+├── docs/
+│   └── cjgate-architecture.png
 │
 ├── contracts/
 │   └── cjgate.compact
