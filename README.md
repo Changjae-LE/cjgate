@@ -1,8 +1,42 @@
 # CJGate
 
-**Privacy-preserving DevSecOps security gates powered by Midnight zero-knowledge proofs.**
+**A privacy-preserving DevSecOps security gate for CI/CD pipelines.**
 
-CJGate scans a software repository with real security tools while keeping the underlying security findings private. A Midnight Compact contract verifies that the repository satisfies the required security policy, allowing the project to prove compliance without revealing the scanner findings or their counts.
+[![Security Gate](https://github.com/Changjae-LE/cjgate/actions/workflows/cjgate-security-gate.yml/badge.svg)](https://github.com/Changjae-LE/cjgate/actions/workflows/cjgate-security-gate.yml)
+
+CJGate integrates Gitleaks and Semgrep with GitHub Actions to block a pipeline
+when secret detection or configured high-severity SAST findings violate policy.
+Scanner findings and counts stay private; the gate exposes a PASS/BLOCK decision.
+
+**Stack:** GitHub Actions · Gitleaks · Semgrep · TypeScript · Node.js · Docker · Midnight Compact
+
+## CI/CD Security Pipeline
+
+```mermaid
+flowchart TD
+    A["Repository source"] --> B["Gitleaks + Semgrep"]
+    B --> C["Private scanner signals"]
+    C --> D{"Compact policy satisfied?"}
+    D -->|PASS| E["Continue pipeline"]
+    D -->|BLOCK| F["Fail CI job"]
+```
+
+**The CI gate evaluates the policy locally and does not generate a ZK proof.**
+A separate live path uses a wallet and Midnight Proof Server to generate a proof
+and submit a transaction to Midnight Preprod.
+
+## DevSecOps Skills Demonstrated
+
+- Secret scanning and SAST with pinned scanner versions.
+- Policy enforcement through a non-zero exit code when the repository is blocked.
+- Positive and negative fixtures covering clean, secret, and SAST cases.
+- GitHub Actions with read-only `contents` permission.
+- Separation of private scanner evidence from public policy results.
+- Separate local CI and live proof workflows, with explicit operational requirements.
+
+A PASS means the configured scans satisfied this policy for that execution. It does
+not establish that the repository is free of all vulnerabilities or independently
+attest that scanner inputs were complete and authentic.
 
 ## Architecture
 
