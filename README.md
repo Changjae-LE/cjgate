@@ -1,6 +1,6 @@
 # CJGate
 
-**Privacy-preserving DevSecOps security gates powered by Midnight zero-knowledge proofs.**
+Privacy-preserving DevSecOps security gates powered by Midnight zero-knowledge proofs.
 
 CJGate scans a software repository with real security tools while keeping the underlying security findings private. A Midnight Compact contract verifies that the repository satisfies the required security policy, allowing the project to prove compliance without revealing the scanner findings or their counts.
 
@@ -23,7 +23,7 @@ Those findings may reveal sensitive information such as:
 - internal implementation details
 - security posture information
 
-CJGate separates **security evidence** from **security verification**.
+CJGate separates security evidence from security verification.
 
 The findings remain private, while Midnight is used to prove that the security policy was satisfied.
 
@@ -31,8 +31,8 @@ The findings remain private, while Midnight is used to prove that the security p
 
 CJGate currently integrates two real DevSecOps scanners:
 
-- **Gitleaks** for secret detection
-- **Semgrep** for static application security testing
+- Gitleaks for secret detection
+- Semgrep for static application security testing
 
 Their results are normalized into two private signals:
 
