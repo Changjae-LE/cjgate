@@ -1,6 +1,6 @@
 # CJGate
 
-**A privacy-preserving DevSecOps security gate for CI/CD pipelines.**
+A privacy-preserving DevSecOps security gate for CI/CD pipelines.
 
 [![Security Gate](https://github.com/Changjae-LE/cjgate/actions/workflows/cjgate-security-gate.yml/badge.svg)](https://github.com/Changjae-LE/cjgate/actions/workflows/cjgate-security-gate.yml)
 
@@ -8,7 +8,7 @@ CJGate integrates Gitleaks and Semgrep with GitHub Actions to block a pipeline
 when secret detection or configured high-severity SAST findings violate policy.
 Scanner findings and counts stay private; the gate exposes a PASS/BLOCK decision.
 
-**Stack:** GitHub Actions · Gitleaks · Semgrep · TypeScript · Node.js · Docker · Midnight Compact
+Stack: GitHub Actions · Gitleaks · Semgrep · TypeScript · Node.js · Docker · Midnight Compact
 
 ## CI/CD Security Pipeline
 
@@ -21,7 +21,7 @@ flowchart TD
     D -->|BLOCK| F["Fail CI job"]
 ```
 
-**The CI gate evaluates the policy locally and does not generate a ZK proof.**
+The CI gate evaluates the policy locally and does not generate a ZK proof.
 A separate live path uses a wallet and Midnight Proof Server to generate a proof
 and submit a transaction to Midnight Preprod.
 
@@ -57,7 +57,7 @@ Those findings may reveal sensitive information such as:
 - internal implementation details
 - security posture information
 
-CJGate separates **security evidence** from **security verification**.
+CJGate separates security evidence from security verification.
 
 The findings remain private, while Midnight is used to prove that the security policy was satisfied.
 
@@ -65,8 +65,8 @@ The findings remain private, while Midnight is used to prove that the security p
 
 CJGate currently integrates two real DevSecOps scanners:
 
-- **Gitleaks** for secret detection
-- **Semgrep** for static application security testing
+- Gitleaks for secret detection
+- Semgrep for static application security testing
 
 Their results are normalized into two private signals:
 
